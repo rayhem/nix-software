@@ -1,6 +1,7 @@
 {
   stdenv,
   lib,
+  pkgs,
   buildFHSEnv,
   copyDesktopItems,
   fetchurl,
@@ -12,37 +13,23 @@
   configText ? "",
 }:
 let
-  version = "2406";
+  version = "2506";
 
   sysArch =
     if stdenv.hostPlatform.system == "x86_64-linux" then
       "x64"
     else
       throw "Unsupported system: ${stdenv.hostPlatform.system}";
-  # The downloaded archive also contains ARM binaries, but these have not been tested.
 
-  # For USB support, ensure that /var/run/vmware/<YOUR-UID>
-  # exists and is owned by you. Then run vmware-usbarbitrator as root.
-
-  mainProgram = "vmware-view";
-
-  # This forces the default GTK theme (Adwaita) because Horizon is prone to
-  # UI usability issues when using non-default themes, such as Adwaita-dark.
-  wrapBinCommands = path: name: ''
-    makeWrapper "$out/${path}/${name}" "$out/bin/${name}_wrapper" \
-    --set GTK_THEME Adwaita \
-    --suffix XDG_DATA_DIRS : "${gsettings-desktop-schemas}/share/gsettings-schemas/${gsettings-desktop-schemas.name}" \
-    --suffix LD_LIBRARY_PATH : "$out/lib/vmware/view/crtbora:$out/lib/vmware"
-  '';
+  mainProgram = "horizon-client";
 
   vmwareHorizonClientFiles = stdenv.mkDerivation {
     pname = "vmware-horizon-files";
     inherit version;
     src = fetchurl {
-      url = "https://download3.omnissa.com/software/CART25FQ2_LIN_2406_TARBALL/VMware-Horizon-Client-Linux-2406-8.13.0-9995429239.tar.gz";
-      sha256 = "d6bae5cea83c418bf3a9cb884a7d8351d8499f1858a1ac282fd79dc0c64e83f6";
+      url = "https://download3.omnissa.com/software/CART26FQ2_LIN_2506_TARBALL/Omnissa-Horizon-Client-Linux-2506-8.16.0-16536624989.tar.gz";
+      sha256 = "5515e79188e2605ced5a95c3a3829865b567be5d7a8de00a57455f7b5b2ae392";
     };
-    nativeBuildInputs = [ makeWrapper ];
     installPhase = ''
       mkdir ext
       find ${sysArch} -type f -print0 | xargs -0n1 tar -Cext --strip-components=1 -xf
@@ -52,22 +39,13 @@ let
       cp -r ext/${sysArch}/include $out/
       cp -r ext/${sysArch}/lib $out/
 
-      # Horizon includes a copy of libstdc++ which is loaded via $LD_LIBRARY_PATH
-      # when it cannot detect a new enough version already present on the system.
-      # The checks are distribution-specific and do not function correctly on NixOS.
-      # Deleting the bundled library is the simplest way to force it to use our version.
-      rm "$out/lib/vmware/gcc/libstdc++.so.6"
+      # Remove bundled libraries that conflict with system libraries
+      rm -f "$out/lib/vmware/gcc/libstdc++.so.6"
+      rm -f "$out/lib/vmware/libpng16.so.16"
 
-      # This bundled version of libpng causes browser issues, and would prevent web-based sign-on.
-      rm "$out/lib/vmware/libpng16.so.16"
-
-      # This opensc library is required to support smartcard authentication during the
-      # initial connection to Horizon.
-      mkdir $out/lib/vmware/view/pkcs11
+      # Set up opensc for smartcard support
+      mkdir -p $out/lib/vmware/view/pkcs11
       ln -s ${opensc}/lib/pkcs11/opensc-pkcs11.so $out/lib/vmware/view/pkcs11/libopenscpkcs11.so
-
-      ${wrapBinCommands "bin" "vmware-view"}
-      ${wrapBinCommands "lib/vmware/view/usb" "vmware-eucusbarbitrator"}
     '';
   };
 
@@ -76,7 +54,13 @@ let
     buildFHSEnv {
       inherit pname version;
 
-      runScript = "${vmwareHorizonClientFiles}/bin/${pname}_wrapper";
+      # Create a wrapper script that sets environment and runs the binary
+      runScript = pkgs.writeScript "${pname}-wrapper" ''
+        #!${pkgs.bash}/bin/bash
+        export GTK_THEME=Adwaita
+        export XDG_DATA_DIRS="${gsettings-desktop-schemas}/share/gsettings-schemas/${gsettings-desktop-schemas.name}:$XDG_DATA_DIRS"
+        exec ${vmwareHorizonClientFiles}/bin/${pname} "$@"
+      '';
 
       targetPkgs =
         pkgs: with pkgs; [
@@ -124,11 +108,11 @@ let
     };
 
   desktopItem = makeDesktopItem {
-    name = "vmware-view";
+    name = "horizon-client";
     desktopName = "VMware Horizon Client";
-    icon = "${vmwareHorizonClientFiles}/share/icons/vmware-view.png";
+    icon = "${vmwareHorizonClientFiles}/share/icons/horizon-client.png";
     exec = "${vmwareFHSUserEnv mainProgram}/bin/${mainProgram} %u";
-    mimeTypes = [ "x-scheme-handler/vmware-view" ];
+    mimeTypes = [ "x-scheme-handler/horizon-client" ];
   };
 
 in
@@ -145,7 +129,7 @@ stdenv.mkDerivation {
   installPhase = ''
     runHook preInstall
     mkdir -p $out/bin
-    ln -s ${vmwareFHSUserEnv "vmware-view"}/bin/vmware-view $out/bin/
+    ln -s ${vmwareFHSUserEnv "horizon-client"}/bin/horizon-client $out/bin/
     ln -s ${vmwareFHSUserEnv "vmware-usbarbitrator"}/bin/vmware-usbarbitrator $out/bin/
     runHook postInstall
   '';
